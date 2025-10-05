@@ -1,0 +1,32 @@
+# Core Data Science
+pandas==1.5.3
+numpy==1.24.3
+scikit-learn==1.2.2
+scipy==1.10.1
+
+# Deep Learning & NLP
+tensorflow==2.12.0
+torch==2.0.1
+transformers==4.30.2
+datasets==2.13.1
+
+# NLP Processing
+nltk==3.8.1
+spacy==3.5.3
+scispacy==0.5.1
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.1/en_core_sci_sm-0.5.1.tar.gz
+
+# Visualization
+matplotlib==3.7.1
+seaborn==0.12.2
+plotly==5.14.1
+
+# Utilities
+jupyter==1.0.0
+tqdm==4.65.0
+pyyaml==6.0
+openai==0.27.8
+wandb==0.15.8
+
+# Testing
+pytest==7.3.1

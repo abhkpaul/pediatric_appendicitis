@@ -1,0 +1,67 @@
+data:
+  raw_path: "data/raw/"
+  processed_path: "data/processed/"
+  features_path: "data/features/"
+
+  file_names:
+    us_reports: "us_reports.csv"
+    or_reports: "or_reports.csv"
+    merged_data: "merged_data.csv"
+
+  text_columns:
+    us: "us_report_text"
+    or: "or_report_text"
+    merged: "report_text"
+
+  target_column: "severity_grade"
+
+preprocessing:
+  max_sequence_length: 512
+  test_size: 0.15
+  val_size: 0.15
+  random_state: 42
+
+features:
+  tfidf:
+    max_features: 5000
+    ngram_range: [1, 2]
+
+  embeddings:
+    model_name: "emilyalsentzer/Bio_ClinicalBERT"
+    batch_size: 16
+
+models:
+  baseline:
+    logistic_regression:
+      C: 1.0
+      max_iter: 1000
+
+    random_forest:
+      n_estimators: 100
+      max_depth: 20
+
+    svm:
+      C: 1.0
+      kernel: "linear"
+
+  neural_networks:
+    lstm:
+      embedding_dim: 100
+      hidden_dim: 128
+      dropout_rate: 0.2
+      learning_rate: 0.001
+
+    bert:
+      learning_rate: 2e-5
+      num_epochs: 4
+      batch_size: 8
+
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1"]
+  comparison_methods: ["manual", "chatgpt"]
+
+api:
+  openai:
+    model: "gpt-4"
+    temperature: 0.1
+    max_tokens: 100
