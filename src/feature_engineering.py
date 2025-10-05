@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
-from transformers import AutoTokenizer, AutoModel
-import torch
 import yaml
 import logging
 import joblib
@@ -19,21 +17,6 @@ class FeatureEngineer:
             self.config = yaml.safe_load(file)
 
         self.tfidf_vectorizer = None
-        self.bert_tokenizer = None
-        self.bert_model = None
-
-    def initialize_bert_model(self):
-        """Initialize BERT model for feature extraction."""
-        model_name = self.config['features']['embeddings']['model_name']
-        logger.info(f"Loading BERT model: {model_name}")
-
-        self.bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.bert_model = AutoModel.from_pretrained(model_name)
-
-        # Use GPU if available
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.bert_model.to(self.device)
-        self.bert_model.eval()
 
     def extract_tfidf_features(self, train_texts, test_texts, val_texts=None):
         """Extract TF-IDF features from text."""
@@ -42,7 +25,10 @@ class FeatureEngineer:
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=tfidf_config['max_features'],
             ngram_range=tuple(tfidf_config['ngram_range']),
-            stop_words='english'
+            stop_words='english',
+            min_df=2,  # Ignore terms that appear in only 1 document
+            max_df=0.8,  # Ignore terms that appear in more than 80% of documents
+            n_jobs=1  # Single-threaded
         )
 
         # Fit on training data
@@ -56,34 +42,6 @@ class FeatureEngineer:
             return X_train_tfidf, X_val_tfidf, X_test_tfidf
 
         return X_train_tfidf, X_test_tfidf
-
-    def get_bert_embeddings(self, texts, batch_size=16):
-        """Generate BERT embeddings for a list of texts."""
-        if self.bert_model is None:
-            self.initialize_bert_model()
-
-        all_embeddings = []
-
-        for i in tqdm(range(0, len(texts), batch_size), desc="Generating BERT embeddings"):
-            batch_texts = texts[i:i + batch_size]
-
-            # Tokenize
-            inputs = self.bert_tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
-                max_length=self.config['preprocessing']['max_sequence_length'],
-                return_tensors="pt"
-            ).to(self.device)
-
-            # Generate embeddings
-            with torch.no_grad():
-                outputs = self.bert_model(**inputs)
-                # Use [CLS] token embedding as sentence representation
-                embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                all_embeddings.append(embeddings)
-
-        return np.vstack(all_embeddings)
 
     def create_ner_features(self, entity_lists, entity_vocab):
         """Create binary features for medical entities."""
@@ -154,12 +112,8 @@ if __name__ == "__main__":
         test_df['processed_text']
     )
 
-    # Extract BERT embeddings (for smaller subset if needed)
-    sample_texts = train_df['processed_text'].tolist()[:100]  # Sample for demo
-    bert_embeddings = feature_engineer.get_bert_embeddings(sample_texts)
-
     # Save features
     feature_engineer.save_features(
-        [X_train_tfidf, X_test_tfidf, bert_embeddings],
-        ['X_train_tfidf', 'X_test_tfidf', 'bert_embeddings_sample']
+        [X_train_tfidf, X_test_tfidf],
+        ['X_train_tfidf', 'X_test_tfidf']
     )

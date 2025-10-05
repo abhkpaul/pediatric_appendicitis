@@ -23,38 +23,36 @@ preprocessing:
 
 features:
   tfidf:
-    max_features: 5000
+    max_features: 3000  # Reduced for CPU efficiency
     ngram_range: [1, 2]
-
-  embeddings:
-    model_name: "emilyalsentzer/Bio_ClinicalBERT"
-    batch_size: 16
 
 models:
   baseline:
     logistic_regression:
       C: 1.0
       max_iter: 1000
+      solver: 'liblinear'  # CPU efficient
 
     random_forest:
       n_estimators: 100
       max_depth: 20
+      n_jobs: 1  # Single-threaded
 
     svm:
       C: 1.0
       kernel: "linear"
 
-  neural_networks:
-    lstm:
-      embedding_dim: 100
-      hidden_dim: 128
-      dropout_rate: 0.2
-      learning_rate: 0.001
+    xgboost:
+      n_estimators: 100
+      max_depth: 6
+      learning_rate: 0.1
+      n_jobs: 1  # Single-threaded
 
-    bert:
-      learning_rate: 2e-5
-      num_epochs: 4
-      batch_size: 8
+    lightgbm:
+      n_estimators: 100
+      max_depth: -1
+      learning_rate: 0.1
+      n_jobs: 1  # Single-threaded
 
 evaluation:
   metrics: ["accuracy", "precision", "recall", "f1"]

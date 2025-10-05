@@ -6,13 +6,11 @@ import logging
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.metrics import accuracy_score, classification_report
 import xgboost as xgb
-import tensorflow as tf
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
-from datasets import Dataset
-import torch
+import lightgbm as lgb
+from scipy.sparse import issparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,15 +30,37 @@ class ModelTrainer:
         features = []
 
         for name in feature_names:
-            feature = np.load(f"{features_path}{name}{suffix}.npy")
+            try:
+                # Try loading as sparse matrix first
+                file_path = f"{features_path}{name}{suffix}.npz"
+                sparse_data = np.load(file_path, allow_pickle=True)
+                from scipy.sparse import csr_matrix
+                feature = csr_matrix((sparse_data['data'], sparse_data['indices'],
+                                      sparse_data['indptr']), shape=sparse_data['shape'])
+            except FileNotFoundError:
+                # Try loading as dense matrix
+                try:
+                    file_path = f"{features_path}{name}{suffix}.npy"
+                    feature = np.load(file_path, allow_pickle=True)
+                except FileNotFoundError:
+                    logger.error(f"Feature file not found: {file_path}")
+                    feature = None
+
             features.append(feature)
-            logger.info(f"Loaded {name}: {feature.shape}")
+            if feature is not None:
+                logger.info(f"Loaded {name}: {feature.shape}")
 
         return features
 
     def train_baseline_models(self, X_train, y_train, X_val=None, y_val=None):
-        """Train traditional machine learning models."""
+        """Train traditional machine learning models (CPU optimized, single-threaded)."""
         baseline_config = self.config['models']['baseline']
+
+        # Convert to dense if sparse and small enough
+        if issparse(X_train) and X_train.shape[1] < 10000:
+            X_train = X_train.toarray()
+            if X_val is not None and issparse(X_val):
+                X_val = X_val.toarray()
 
         models = {
             'logistic_regression': LogisticRegression(
@@ -57,8 +77,14 @@ class ModelTrainer:
                 probability=True
             ),
             'xgboost': xgb.XGBClassifier(
+                **baseline_config['xgboost'],
                 random_state=42,
                 eval_metric='logloss'
+            ),
+            'lightgbm': lgb.LGBMClassifier(
+                **baseline_config['lightgbm'],
+                random_state=42,
+                verbose=-1  # Suppress output
             )
         }
 
@@ -77,206 +103,110 @@ class ModelTrainer:
         self.models.update(trained_models)
         return trained_models
 
-    def train_lstm_model(self, X_train, y_train, X_val=None, y_val=None, vocab_size=10000, embedding_dim=100):
-        """Train LSTM model for text classification."""
-        from tensorflow.keras.preprocessing.text import Tokenizer
-        from tensorflow.keras.preprocessing.sequence import pad_sequences
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
-
-        lstm_config = self.config['models']['neural_networks']['lstm']
-
-        # Tokenize text
-        tokenizer = Tokenizer(num_words=vocab_size)
-        tokenizer.fit_on_texts(X_train)
-
-        # Convert texts to sequences
-        X_train_seq = tokenizer.texts_to_sequences(X_train)
-        X_train_pad = pad_sequences(X_train_seq, maxlen=self.config['preprocessing']['max_sequence_length'])
-
-        if X_val is not None:
-            X_val_seq = tokenizer.texts_to_sequences(X_val)
-            X_val_pad = pad_sequences(X_val_seq, maxlen=self.config['preprocessing']['max_sequence_length'])
-
-        # Build LSTM model
-        num_classes = len(np.unique(y_train))
-        model = Sequential([
-            Embedding(vocab_size, lstm_config['embedding_dim'], input_length=X_train_pad.shape[1]),
-            LSTM(lstm_config['hidden_dim'], return_sequences=True, dropout=lstm_config['dropout_rate']),
-            LSTM(lstm_config['hidden_dim'] // 2, dropout=lstm_config['dropout_rate']),
-            Dense(64, activation='relu'),
-            Dropout(lstm_config['dropout_rate']),
-            Dense(num_classes, activation='softmax')
-        ])
-
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=lstm_config['learning_rate']),
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']
-        )
-
-        logger.info("LSTM model architecture:")
-        model.summary()
-
-        # Train model
-        callbacks = [
-            tf.keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True),
-            tf.keras.callbacks.ReduceLROnPlateau(patience=2)
-        ]
-
-        if X_val is not None:
-            history = model.fit(
-                X_train_pad, y_train,
-                validation_data=(X_val_pad, y_val),
-                epochs=20,
-                batch_size=32,
-                callbacks=callbacks,
-                verbose=1
-            )
-        else:
-            history = model.fit(
-                X_train_pad, y_train,
-                epochs=20,
-                batch_size=32,
-                callbacks=callbacks,
-                verbose=1
-            )
-
-        self.models['lstm'] = model
-        self.models['lstm_tokenizer'] = tokenizer
-
-        return model, history
-
-    def train_bert_model(self, train_texts, train_labels, val_texts=None, val_labels=None):
-        """Fine-tune BERT model for classification."""
-        bert_config = self.config['models']['neural_networks']['bert']
-        model_name = self.config['features']['embeddings']['model_name']
-
-        # Load tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        num_classes = len(np.unique(train_labels))
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
-            num_labels=num_classes
-        )
-
-        # Tokenize datasets
-        def tokenize_function(batch):
-            return tokenizer(
-                batch['text'],
-                padding=True,
-                truncation=True,
-                max_length=self.config['preprocessing']['max_sequence_length']
-            )
-
-        # Prepare datasets
-        train_data = {'text': train_texts, 'labels': train_labels}
-        train_dataset = Dataset.from_dict(train_data)
-        train_dataset = train_dataset.map(tokenize_function, batched=True)
-
-        if val_texts is not None and val_labels is not None:
-            val_data = {'text': val_texts, 'labels': val_labels}
-            val_dataset = Dataset.from_dict(val_data)
-            val_dataset = val_dataset.map(tokenize_function, batched=True)
-        else:
-            val_dataset = None
-
-        # Training arguments
-        training_args = TrainingArguments(
-            output_dir='./models/bert/',
-            num_train_epochs=bert_config['num_epochs'],
-            per_device_train_batch_size=bert_config['batch_size'],
-            per_device_eval_batch_size=bert_config['batch_size'],
-            learning_rate=bert_config['learning_rate'],
-            evaluation_strategy="epoch" if val_dataset else "no",
-            save_strategy="epoch",
-            logging_dir='./logs/bert/',
-            logging_steps=10,
-            load_best_model_at_end=True if val_dataset else False,
-            metric_for_best_model="eval_loss",
-        )
-
-        # Define compute_metrics function
-        def compute_metrics(p):
-            predictions, labels = p
-            predictions = np.argmax(predictions, axis=1)
-            return {"accuracy": (predictions == labels).mean()}
-
-        # Create trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            tokenizer=tokenizer,
-            compute_metrics=compute_metrics,
-        )
-
-        # Train model
-        logger.info("Fine-tuning BERT model...")
-        trainer.train()
-
-        self.models['bert'] = model
-        self.models['bert_tokenizer'] = tokenizer
-
-        return model, trainer
-
-    def hyperparameter_tuning(self, model, param_grid, X_train, y_train):
-        """Perform hyperparameter tuning using GridSearchCV."""
-        grid_search = GridSearchCV(
+    def hyperparameter_tuning(self, model, param_grid, X_train, y_train, cv=3):
+        """Perform hyperparameter tuning using RandomizedSearchCV (CPU efficient)."""
+        search = RandomizedSearchCV(
             model,
             param_grid,
-            cv=5,
+            cv=cv,
             scoring='accuracy',
             n_jobs=-1,
-            verbose=1
+            verbose=1,
+            n_iter=10,  # Limit iterations for CPU efficiency
+            random_state=42
         )
 
-        grid_search.fit(X_train, y_train)
+        search.fit(X_train, y_train)
 
-        logger.info(f"Best parameters: {grid_search.best_params_}")
-        logger.info(f"Best cross-validation score: {grid_search.best_score_:.4f}")
+        logger.info(f"Best parameters: {search.best_params_}")
+        logger.info(f"Best cross-validation score: {search.best_score_:.4f}")
 
-        return grid_search.best_estimator_
+        return search.best_estimator_
+
+    def train_ensemble(self, X_train, y_train, X_val=None, y_val=None):
+        """Train an ensemble of models."""
+        from sklearn.ensemble import VotingClassifier
+
+        # First train individual models
+        individual_models = self.train_baseline_models(X_train, y_train, X_val, y_val)
+
+        # Create voting classifier
+        estimators = [(name, model) for name, model in individual_models.items()]
+        voting_clf = VotingClassifier(estimators=estimators, voting='soft')
+
+        logger.info("Training ensemble model...")
+        voting_clf.fit(X_train, y_train)
+
+        self.models['ensemble'] = voting_clf
+        return voting_clf
+
+    def select_best_model(self, X_val, y_val):
+        """Select the best performing model on validation set."""
+        best_score = 0
+        best_model_name = None
+
+        for name, model in self.models.items():
+            y_pred = model.predict(X_val)
+            accuracy = accuracy_score(y_val, y_pred)
+
+            if accuracy > best_score:
+                best_score = accuracy
+                best_model_name = name
+
+        self.best_model = self.models[best_model_name]
+        logger.info(f"Best model: {best_model_name} with accuracy: {best_score:.4f}")
+
+        return best_model_name, self.best_model
 
     def save_models(self, suffix=""):
         """Save trained models."""
         import os
-        models_path = self.config['data']['processed_path'].replace('processed', 'models')
+        models_path = "models/"
+        os.makedirs(models_path, exist_ok=True)
 
         for name, model in self.models.items():
-            if 'tokenizer' in name:
-                continue
+            joblib.dump(model, f"{models_path}{name}_model{suffix}.pkl")
 
-            if hasattr(model, 'save'):
-                # TensorFlow/Keras model
-                os.makedirs(f"{models_path}{name}/", exist_ok=True)
-                model.save(f"{models_path}{name}/model{suffix}.h5")
-            elif hasattr(model, 'save_pretrained'):
-                # Transformers model
-                model.save_pretrained(f"{models_path}{name}{suffix}/")
-            else:
-                # Scikit-learn model
-                joblib.dump(model, f"{models_path}{name}_model{suffix}.pkl")
-
-        # Save tokenizers
-        if 'lstm_tokenizer' in self.models:
-            joblib.dump(self.models['lstm_tokenizer'], f"{models_path}lstm_tokenizer{suffix}.pkl")
+        if self.best_model:
+            joblib.dump(self.best_model, f"{models_path}best_model{suffix}.pkl")
 
         logger.info(f"Models saved to {models_path}")
 
 
-# Example usage
-if __name__ == "__main__":
+def train_cpu_pipeline():
+    """Convenience function to train all models quickly."""
     trainer = ModelTrainer()
 
-    # Load features and labels
-    X_train_tfidf, X_test_tfidf = trainer.load_features(['X_train_tfidf', 'X_test_tfidf'])
+    # Load features
+    X_train = trainer.load_features(['X_train_combined'])[0]
+
+    # Load labels
     train_df = pd.read_csv("data/processed/train_data.csv")
     y_train = train_df['label_encoded']
 
-    # Train baseline models
-    baseline_models = trainer.train_baseline_models(X_train_tfidf, y_train)
+    # Load validation data if available
+    try:
+        val_df = pd.read_csv("data/processed/val_data.csv")
+        X_val = trainer.load_features(['X_val_combined'])[0]
+        y_val = val_df['label_encoded']
+    except:
+        X_val, y_val = None, None
 
-    # Save models
+    # Train models
+    if X_val is not None:
+        models = trainer.train_baseline_models(X_train, y_train, X_val, y_val)
+        best_name, best_model = trainer.select_best_model(X_val, y_val)
+    else:
+        models = trainer.train_baseline_models(X_train, y_train)
+
+    # Train ensemble
+    ensemble = trainer.train_ensemble(X_train, y_train, X_val, y_val)
+
     trainer.save_models()
+
+    return trainer.models
+
+
+if __name__ == "__main__":
+    models = train_cpu_pipeline()
+    print("✅ All models trained and saved successfully!")

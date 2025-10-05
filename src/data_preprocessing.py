@@ -7,7 +7,6 @@ from sklearn.preprocessing import LabelEncoder
 import yaml
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -17,14 +16,12 @@ class DataPreprocessor:
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
 
-        # Load NLP models
+        # Load only CPU-efficient NLP models
         try:
-            self.nlp = spacy.load('en_core_web_sm')
-            self.nlp_medical = spacy.load('en_core_sci_sm')
+            self.nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
         except OSError:
-            logger.warning("SpaCy models not found. Please install them.")
+            logger.warning("SpaCy model not found. Using simple tokenization.")
             self.nlp = None
-            self.nlp_medical = None
 
         self.label_encoder = LabelEncoder()
 
@@ -42,34 +39,35 @@ class DataPreprocessor:
             return None
 
     def clean_clinical_text(self, text):
-        """Clean and preprocess clinical text."""
+        """Clean and preprocess clinical text (CPU efficient)."""
         if pd.isna(text):
             return ""
 
-        # Convert to lowercase
-        text = text.lower()
-
-        # Remove numbers and specific patterns
+        # Basic cleaning operations
+        text = str(text).lower()
         text = re.sub(r'\d+', '', text)
-        text = re.sub(r'\[\*.*?\*\]', '', text)  # Remove de-identification markers
-
-        # Remove punctuation and special characters, but keep clinical terms
+        text = re.sub(r'\[\*.*?\*\]', '', text)
         text = re.sub(r'[^\w\s]', ' ', text)
-
-        # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text).strip()
 
         return text
 
+    def simple_tokenize(self, text):
+        """Simple tokenization without heavy NLP."""
+        if not text:
+            return []
+        return text.split()
+
     def advanced_text_processing(self, text):
-        """Advanced NLP processing with spaCy."""
+        """Advanced processing with light CPU usage."""
         if self.nlp is None or not text:
-            return text
+            # Fallback to simple processing
+            tokens = self.simple_tokenize(text)
+            return ' '.join(tokens)
 
         doc = self.nlp(text)
-
-        # Lemmatization and filtering
         processed_tokens = []
+
         for token in doc:
             if (not token.is_stop and
                     not token.is_punct and
@@ -79,14 +77,21 @@ class DataPreprocessor:
 
         return ' '.join(processed_tokens)
 
-    def extract_medical_entities(self, text):
-        """Extract medical entities using scispaCy."""
-        if self.nlp_medical is None or not text:
-            return []
+    def extract_medical_keywords(self, text):
+        """Extract medical keywords using simple pattern matching."""
+        medical_terms = [
+            'appendicitis', 'perforated', 'gangrenous', 'inflamed', 'abscess',
+            'appendicolith', 'fluid', 'thickening', 'diameter', 'normal',
+            'simple', 'complicated', 'phlegmon', 'contamination'
+        ]
 
-        doc = self.nlp_medical(text)
-        entities = [ent.text for ent in doc.ents]
-        return entities
+        found_terms = []
+        text_lower = text.lower()
+        for term in medical_terms:
+            if term in text_lower:
+                found_terms.append(term)
+
+        return found_terms
 
     def prepare_dataset(self, df, text_column, target_column):
         """Prepare the dataset for training."""
@@ -98,8 +103,8 @@ class DataPreprocessor:
         # Advanced processing
         df['processed_text'] = df['cleaned_text'].apply(self.advanced_text_processing)
 
-        # Extract medical entities
-        df['medical_entities'] = df['cleaned_text'].apply(self.extract_medical_entities)
+        # Extract medical keywords
+        df['medical_keywords'] = df['cleaned_text'].apply(self.extract_medical_keywords)
 
         # Encode target labels
         df['label_encoded'] = self.label_encoder.fit_transform(df[target_column])
@@ -146,24 +151,8 @@ class DataPreprocessor:
         val_df.to_csv(f"{processed_path}val_data{suffix}.csv", index=False)
         test_df.to_csv(f"{processed_path}test_data{suffix}.csv", index=False)
 
+        # Save label encoder
+        import joblib
+        joblib.dump(self.label_encoder, f"{processed_path}label_encoder{suffix}.pkl")
+
         logger.info(f"Processed data saved to {processed_path}")
-
-
-# Example usage
-if __name__ == "__main__":
-    preprocessor = DataPreprocessor()
-
-    # Load and preprocess data
-    df = preprocessor.load_data("merged")
-    if df is not None:
-        df = preprocessor.prepare_dataset(
-            df,
-            text_column='report_text',
-            target_column='severity_grade'
-        )
-
-        # Split data
-        train_df, val_df, test_df = preprocessor.split_data(df)
-
-        # Save processed data
-        preprocessor.save_processed_data(train_df, val_df, test_df)

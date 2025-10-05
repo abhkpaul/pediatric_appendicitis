@@ -1,3 +1,4 @@
+# Only change the imports at the top to remove deep learning dependencies
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,9 +8,9 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 import json
 import yaml
 import logging
-from openai import OpenAI
 import joblib
 
+# Rest of the code remains the same...
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
