@@ -45,6 +45,7 @@ def run_full_pipeline():
         preprocessor = DataPreprocessor()
 
         # Create sample data if it doesn't exist
+        import os
         sample_data_path = "data/raw/merged_data.csv"
         if not os.path.exists(sample_data_path):
             logger.info("Creating sample data structure...")
