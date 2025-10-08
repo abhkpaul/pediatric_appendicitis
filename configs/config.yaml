@@ -1,7 +1,17 @@
+data_extraction:
+  us_pdf_directory: "/Users/abhk/Git/pediatric_appendicitis/data/raw/pdfs/ultrasound_test/"
+  or_pdf_directory: "/Users/abhk/Git/pediatric_appendicitis/data/raw/pdfs/operative/"
+  us_output_csv: "/Users/abhk/Git/pediatric_appendicitis/data/raw/us_reports.csv"
+  or_output_csv: "/Users/abhk/Git/pediatric_appendicitis/data/raw/or_reports.csv"
+  consolidated_output_csv: "/Users/abhk/Git/pediatric_appendicitis/data/raw/merged_data.csv"
+
+  extraction:
+    use_pdfplumber: true
+    fallback_to_pypdf2: true
 data:
-  raw_path: "data/raw/"
-  processed_path: "data/processed/"
-  features_path: "data/features/"
+  raw_path: "/Users/abhk/Git/pediatric_appendicitis/data/raw/"
+  processed_path: "/Users/abhk/Git/pediatric_appendicitis/data/processed/"
+  features_path: "/Users/abhk/Git/pediatric_appendicitis/data/features/"
 
   file_names:
     us_reports: "us_reports.csv"

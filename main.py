@@ -46,12 +46,12 @@ def run_full_pipeline():
 
         # Create sample data if it doesn't exist
         import os
-        sample_data_path = "data/raw/merged_data.csv"
+        sample_data_path = "/Users/abhk/Git/pediatric_appendicitis/data/raw/merged_data.csv"
         if not os.path.exists(sample_data_path):
             logger.info("Creating sample data structure...")
             create_sample_data()
 
-        df = preprocessor.load_data("merged")
+        df = preprocessor.load_data("merged_data")
 
         if df is not None:
             df = preprocessor.prepare_dataset(df, 'report_text', 'severity_grade')
